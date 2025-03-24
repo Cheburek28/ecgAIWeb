@@ -1,0 +1,18 @@
+<!-- analysis/templates/analysis/ecg_upload.html -->
+{% extends 'analysis/base.html' %}
+
+{% block content %}
+<div class="card">
+    <h1>Загрузка ЭКГ</h1>
+    <form method="POST" enctype="multipart/form-data">
+        {% csrf_token %}
+        <label for="ecgFile">Файл ЭКГ:</label>
+        <input type="file" id="ecgFile" name="ecg_file" required>
+
+        <label for="comment">Комментарий:</label>
+        <textarea id="comment" name="comment" rows="4"></textarea>
+
+        <button type="submit" class="btn">Обработать</button>
+    </form>
+</div>
+{% endblock %}

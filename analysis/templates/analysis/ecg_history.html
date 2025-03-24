@@ -1,0 +1,24 @@
+<!-- analysis/templates/analysis/ecg_history.html -->
+{% extends 'analysis/base.html' %}
+
+{% block content %}
+
+<h1>История обработок</h1>
+{% if ecg_records %}
+    {% for record in ecg_records %}
+    <div class="card">
+        <p><strong>Дата:</strong> {{ record.created_at }}</p>
+        <p><strong>Комментарий:</strong> {{ record.comment }}</p>
+        <p>
+            <strong>Файл:</strong>
+            <a href="{{ record.ecg_file.url }}">{{ record.ecg_file.name }}</a>
+        </p>
+        <p><strong>Результат:</strong> {{ record.result }}</p>
+    </div>
+    {% endfor %}
+{% else %}
+    <div class="card">
+        <p>Нет загруженных файлов.</p>
+    </div>
+{% endif %}
+{% endblock %}

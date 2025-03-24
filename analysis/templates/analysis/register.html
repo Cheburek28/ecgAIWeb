@@ -1,0 +1,15 @@
+<!-- analysis/templates/analysis/register.html -->
+
+{% extends 'analysis/base.html' %}
+
+{% block content %}
+<div class="card">
+    <h1>Регистрация</h1>
+    <form method="POST">
+        {% csrf_token %}
+        {{ form.as_p }}
+        <button type="submit">Зарегистрироваться</button>
+    </form>
+    <p>Уже есть аккаунт? <a href="{% url 'login' %}">Войти</a></p>
+</div>
+{% endblock %}

@@ -1,0 +1,13 @@
+<!-- analysis/templates/analysis/home.html -->
+{% extends 'analysis/base.html' %}
+
+{% block content %}
+<div class="card">
+    <h1>Добро пожаловать!</h1>
+    {% if user.is_authenticated %}
+    <p>Это наш сервис анализа ЭКГ. Перейдите на станицу "Загрузить ЭКГ", чтобы начать работу</p>
+    {% else %}
+    <p>Это наш сервис анализа ЭКГ. Зарегистрируйтесь или войдите, чтобы начать работу!</p>
+    {% endif %}
+</div>
+{% endblock %}

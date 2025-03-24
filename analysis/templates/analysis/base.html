@@ -1,0 +1,42 @@
+<!-- analysis/templates/analysis/base.html -->
+{% load static %}
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>ECG Analysis</title>
+    <link rel="stylesheet" href="{% static 'analysis/css/styles.css' %}">
+</head>
+<body>
+
+<header class="navbar">
+    <div class="container navbar-content">
+        <div class="navbar-brand">
+            <a href="{% url 'home' %}">ECG Analysis</a>
+        </div>
+        <nav class="nav-menu">
+            {% if user.is_authenticated %}
+                <a class="nav-link" href="{% url 'ecg_upload' %}">Загрузить ЭКГ</a>
+                <a class="nav-link" href="{% url 'ecg_history' %}">История</a>
+                <a class="nav-link" href="{% url 'logout' %}">Выйти</a>
+            {% else %}
+                <a class="nav-link" href="{% url 'login' %}">Войти</a>
+                <a class="nav-link" href="{% url 'register' %}">Регистрация</a>
+            {% endif %}
+        </nav>
+    </div>
+</header>
+
+<div class="container">
+    {% block content %}
+    {% endblock %}
+</div>
+
+<footer class="footer">
+    <div class="container">
+        <p>© 2025 ECG Analysis Service</p>
+    </div>
+</footer>
+
+</body>
+</html>
