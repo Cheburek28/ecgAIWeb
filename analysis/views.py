@@ -61,6 +61,8 @@ def ecg_upload(request):
             # Имитируем длительную обработку (например, создаём задание для Celery
             # либо сразу здесь что-то делаем). В MVP можно просто записать "Обработка завершена".
             # ecg_process.result = run_ml_process(ecg_file)  # здесь вызов ml
+            import time
+            time.sleep(20)
             ecg_process.result = "Обработка завершена (заглушка)."
             ecg_process.save()
 

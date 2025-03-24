@@ -4,7 +4,9 @@
 {% block content %}
 <div class="card">
     <h1>Загрузка ЭКГ</h1>
-    <form method="POST" enctype="multipart/form-data">
+
+    <!-- Форма загрузки -->
+    <form id="uploadForm" method="POST" enctype="multipart/form-data">
         {% csrf_token %}
         <label for="ecgFile">Файл ЭКГ:</label>
         <input type="file" id="ecgFile" name="ecg_file" required>
@@ -12,7 +14,25 @@
         <label for="comment">Комментарий:</label>
         <textarea id="comment" name="comment" rows="4"></textarea>
 
-        <button type="submit" class="btn">Обработать</button>
+        <button type="submit" id="submitButton" class="btn">Обработать</button>
     </form>
+
+    <!-- Блок со "спиннером" или сообщением. Скрыт по умолчанию (display: none). -->
+    <div id="loadingIndicator" style="display: none; margin-top: 20px;">
+        <p>Идёт обработка, пожалуйста подождите...</p>
+        <!-- Можно добавить простую анимацию "spinner": -->
+        <div class="spinner"></div>
+    </div>
 </div>
+
+<!-- Скрипт, который показывает спиннер при нажатии на кнопку -->
+<script>
+document.getElementById("uploadForm").addEventListener("submit", function() {
+    // 1) Показываем блок с надписью "идёт обработка"
+    document.getElementById("loadingIndicator").style.display = 'block';
+
+    // 2) Блокируем кнопку, чтобы пользователь не нажал повторно
+    document.getElementById("submitButton").disabled = true;
+});
+</script>
 {% endblock %}

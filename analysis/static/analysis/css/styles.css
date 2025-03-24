@@ -1,13 +1,13 @@
 /* analysis/static/analysis/css/styles.css */
 
-/* Базовые стили для всего сайта */
+/* Сбрасываем отступы и растягиваем html, body на высоту экрана */
 html, body {
     height: 100%;
     margin: 0;
     padding: 0;
 }
 
-
+/* Делаем body flex-контейнером, чтобы управлять расположением шапки, контента, футера */
 body {
     display: flex;
     flex-direction: column; /* элементы идут сверху вниз */
@@ -16,15 +16,7 @@ body {
     color: #333;
 }
 
-/* Контейнер для ограничения ширины и отступов */
-.container {
-    width: 90%;
-    max-width: 800px; /* можно чуть увеличить, например 1000px */
-    margin: 0 auto;
-    padding: 20px 0;
-}
-
-/* Шапка сайта */
+/* Шапка */
 .navbar {
     background-color: #444;
     color: #fff;
@@ -32,9 +24,12 @@ body {
 }
 
 .navbar-content {
+    width: 90%;
+    max-width: 800px;
+    margin: 0 auto;
     display: flex;
-    align-items: center;
     justify-content: space-between;
+    align-items: center;
 }
 
 .navbar-brand a {
@@ -44,10 +39,9 @@ body {
     font-weight: bold;
 }
 
-/* Меню навигации */
 .nav-menu {
     display: flex;
-    gap: 15px; /* расстояние между ссылками */
+    gap: 15px;
 }
 
 .nav-link {
@@ -56,39 +50,30 @@ body {
     font-weight: 500;
     transition: color 0.2s ease;
 }
-
 .nav-link:hover {
     color: #ddd;
 }
 
-/* Футер */
+/* Основной контейнер (главный контент).
+   flex: 1 0 auto; говорит: "занимай всё доступное пространство по вертикали, но не сжимайся в ноль". */
+.container {
+    flex: 1 0 auto;
+    width: 90%;
+    max-width: 800px;
+    margin: 0 auto;
+    padding: 20px 0;
+}
+
+/* Футер. flex-shrink: 0 чтобы не сжимался. */
 .footer {
+    flex-shrink: 0;
     background-color: #444;
     color: #fff;
     text-align: center;
     padding: 10px 0;
-    margin-top: 40px; /* отступ сверху */
 }
 
-/* Стили для кнопок (пример универсальных классов) */
-button,
-.btn {
-    background-color: #4CAF50; /* зеленоватая кнопка */
-    color: #fff;
-    border: none;
-    padding: 10px 16px;
-    cursor: pointer;
-    font-size: 14px;
-    border-radius: 4px;
-    transition: background-color 0.3s ease;
-}
-
-button:hover,
-.btn:hover {
-    background-color: #45a049;
-}
-
-/* Карточки / блоки */
+/* Пример карточек / блоков */
 .card {
     background-color: #fff;
     border-radius: 4px;
@@ -97,14 +82,24 @@ button:hover,
     padding: 20px;
 }
 
-/* Заголовки внутри карточек */
-.card h1,
-.card h2,
-.card h3 {
-    margin-bottom: 15px;
+/* Пример кнопок */
+button,
+.btn {
+    background-color: #4CAF50;
+    color: #fff;
+    border: none;
+    padding: 10px 16px;
+    cursor: pointer;
+    font-size: 14px;
+    border-radius: 4px;
+    transition: background-color 0.3s ease;
+}
+button:hover,
+.btn:hover {
+    background-color: #45a049;
 }
 
-/* Формы */
+/* Пример стилей для форм */
 form label {
     display: block;
     margin-bottom: 5px;
@@ -123,6 +118,17 @@ form textarea {
     border-radius: 4px;
 }
 
-form button[type="submit"] {
-    margin-top: 10px;
+.spinner {
+    border: 5px solid #f3f3f3; /* светлый цвет */
+    border-top: 5px solid #3498db; /* цвет "крутилки" */
+    border-radius: 50%;
+    width: 30px;
+    height: 30px;
+    animation: spin 1s linear infinite;
+    margin: 0 auto;
+}
+
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
 }
