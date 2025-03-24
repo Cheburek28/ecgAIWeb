@@ -123,5 +123,8 @@ USE_TZ = True
 
 STATIC_URL = '/static/'
 
-TIME_ZONE = 'Europe/Moscow'  # или любой другой ваш регион
+LANGUAGE_CODE = 'ru-RU'  # вместо en-us
+TIME_ZONE = 'Europe/Moscow'  # при желании
+USE_I18N = True
+USE_L10N = True
 USE_TZ = True
