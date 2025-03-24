@@ -1,6 +1,9 @@
 # db
 *.sqlite3
 
+# media (файлы отчетов)
+/media/
+
 # Python bytecode
 __pycache__/
 *.py[cod]
