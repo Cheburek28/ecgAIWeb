@@ -47,7 +47,7 @@ python manage.py createsuperuser
 python manage.py runserver
 ```
 
-Перейдите в браузере на [http://127.0.0.1:8000/](http://127.0.0.1:8000/)
+Перейдите в браузере на [http://127.0.0.1:8001/](http://127.0.0.1:8001/)
 
 ---
 

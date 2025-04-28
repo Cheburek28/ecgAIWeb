@@ -5,6 +5,8 @@
 <div class="card">
     <h1>Загрузка ЭКГ</h1>
 
+    <p>Формат файла - Zip файл содержащий в себе .hea и .dat файлы с сырыми данными ЭКГ</p>
+
     <!-- Форма загрузки -->
     <form id="uploadForm" method="POST" enctype="multipart/form-data">
         {% csrf_token %}

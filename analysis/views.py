@@ -7,7 +7,11 @@ from django.contrib.auth.forms import AuthenticationForm
 
 from django.contrib.auth.decorators import login_required
 from django.core.files.storage import FileSystemStorage
+from django.conf import settings
 from .models import EcgProcess
+
+import requests
+from django.contrib import messages
 
 
 def register(request):
@@ -52,18 +56,43 @@ def ecg_upload(request):
         if 'ecg_file' in request.FILES:
             ecg_file = request.FILES['ecg_file']
 
+            # Проверяем что файл это zip
+            if not ecg_file.name.endswith('.zip'):
+                messages.error(request, "Можно загрузить только файлы в формате .zip")
+                return redirect('ecg_upload')  # или можно перерендерить ту же страницу
+
             # Сохраняем модель
             ecg_process = EcgProcess.objects.create(
                 user=request.user,
                 ecg_file=ecg_file,
                 comment=comment
             )
-            # Имитируем длительную обработку (например, создаём задание для Celery
-            # либо сразу здесь что-то делаем). В MVP можно просто записать "Обработка завершена".
-            # ecg_process.result = run_ml_process(ecg_file)  # здесь вызов ml
-            import time
-            time.sleep(20)
-            ecg_process.result = "Обработка завершена (заглушка)."
+
+            # Делаем запрос к ecg_service
+            try:
+                ecg_service_url = getattr(settings, 'ECG_SERVICE_URL', 'http://localhost:8000')
+                ecg_file.seek(0)
+                response = requests.post(
+                    f"{ecg_service_url}/ecg",
+                    files={'file': (ecg_file.name, ecg_file.file, 'application/zip')}
+                )
+                response.raise_for_status()
+                data = response.json()
+
+                ecg_process.result = data
+                # допустим, результат — это текст в ответе
+                if "error" in data and data["error"]:
+                    ecg_process.result = "Ошибка работы модели: " + data["error"]
+                else:
+                    ecg_process.result = data
+
+            except requests.RequestException as e:
+                try:
+                    error_detail = e.response.json()
+                except Exception:
+                    error_detail = str(e)
+                ecg_process.result = f"Ошибка обращения к ECG сервису: {error_detail}"
+
             ecg_process.save()
 
             return redirect('ecg_history')
