@@ -102,8 +102,15 @@ def ecg_upload(request):
     return render(request, 'analysis/ecg_upload.html')
 
 
+import markdown
+
+
 @login_required
 def ecg_history(request):
     # Получим все записи пользователя, отсортируем по дате
     ecg_records = EcgProcess.objects.filter(user=request.user).order_by('-created_at')
+
+    for record in ecg_records:
+        record.result_html = markdown.markdown(record.result, extensions=['extra'], output_format='html5')
+
     return render(request, 'analysis/ecg_history.html', {'ecg_records': ecg_records})
