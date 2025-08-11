@@ -11,4 +11,6 @@ urlpatterns = [
     path('upload/', views.ecg_upload, name='ecg_upload'),
     # Страница истории обработок
     path('history/', views.ecg_history, name='ecg_history'),
+    # новый маршрут для PNG превью ЭКГ
+    path('ecg/<int:pk>/plot/', views.ecg_plot, name='ecg_plot'),
 ]

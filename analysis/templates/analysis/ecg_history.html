@@ -1,27 +1,53 @@
-<!-- analysis/templates/analysis/ecg_history.html -->
 {% extends 'analysis/base.html' %}
 
 {% block content %}
-
 <h1>История обработок</h1>
 {% if ecg_records %}
-    {% for record in ecg_records %}
+  {% for record in ecg_records %}
     <div class="card">
-        <p><strong>Дата:</strong> {{ record.created_at }}</p>
-        <p><strong>Комментарий:</strong> {{ record.comment }}</p>
-        <p>
-            <strong>Файл:</strong>
-            <a href="{{ record.ecg_file.url }}">{{ record.ecg_file.name }}</a>
-        </p>
-        <p><strong>Результат:</strong></p>
-        <div class="markdown-result">
-            {{ record.result_html|safe }}
-        </div>
+      <p><strong>Дата:</strong> {{ record.created_at }}</p>
+      <p><strong>Комментарий:</strong> {{ record.comment }}</p>
+      <p><strong>Файл:</strong> <a href="{{ record.ecg_file.url }}">{{ record.ecg_file.name }}</a></p>
+      <p><strong>Результат:</strong> {{ record.result }}</p>
+
+      <button class="btn" type="button"
+              onclick="toggleEcg('{{ record.id }}')">Показать ЭКГ</button>
+
+      <div id="ecg-wrap-{{ record.id }}" style="display:none; margin-top:12px;">
+        <img id="ecg-img-{{ record.id }}" alt="ЭКГ превью"
+             style="max-width:100%; height:auto;"
+             data-src="{% url 'ecg_plot' record.id %}">
+        <div id="ecg-loader-{{ record.id }}" class="spinner" style="display:none; margin-top:8px;"></div>
+      </div>
     </div>
-    {% endfor %}
+  {% endfor %}
 {% else %}
-    <div class="card">
-        <p>Нет загруженных файлов.</p>
-    </div>
+  <div class="card"><p>Нет загруженных файлов.</p></div>
 {% endif %}
+
+<script>
+function toggleEcg(id) {
+  const wrap = document.getElementById('ecg-wrap-' + id);
+  const img  = document.getElementById('ecg-img-' + id);
+  const loader = document.getElementById('ecg-loader-' + id);
+
+  // Переключаем видимость блока
+  const nowHidden = wrap.style.display === 'none';
+  wrap.style.display = nowHidden ? 'block' : 'none';
+  if (!nowHidden) return;
+
+  // Если еще не загружали — загружаем по data-src
+  if (!img.getAttribute('src')) {
+    loader.style.display = 'block';
+    const url = img.getAttribute('data-src');
+    // подменяем src — браузер сам скачает PNG
+    img.onload = () => loader.style.display = 'none';
+    img.onerror = () => {
+      loader.style.display = 'none';
+      alert('Не удалось загрузить превью ЭКГ');
+    };
+    img.setAttribute('src', url);
+  }
+}
+</script>
 {% endblock %}
