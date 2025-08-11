@@ -8,7 +8,10 @@
       <p><strong>Дата:</strong> {{ record.created_at }}</p>
       <p><strong>Комментарий:</strong> {{ record.comment }}</p>
       <p><strong>Файл:</strong> <a href="{{ record.ecg_file.url }}">{{ record.ecg_file.name }}</a></p>
-      <p><strong>Результат:</strong> {{ record.result }}</p>
+      <p><strong>Результат:</strong></p>
+        <div class="markdown-result">
+            {{ record.result_html|safe }}
+        </div>
 
       <button class="btn" type="button"
               onclick="toggleEcg('{{ record.id }}')">Показать ЭКГ</button>
