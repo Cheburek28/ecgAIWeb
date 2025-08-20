@@ -3,7 +3,7 @@
 
 # media (файлы отчетов)
 /media/
-
+/staticfiles/
 # Python bytecode
 __pycache__/
 *.py[cod]

@@ -37,86 +37,124 @@ def render_ecg_png(
     lead_labels: Optional[Sequence[str]] = None,
     units: Optional[Sequence[str]] = None,
 ) -> io.BytesIO:
-    """
-    Рисует ECG с бумажной сеткой: 25 мм/с по X и 10 мм/мВ по Y.
-    - По оси X цифр нет (время читается по миллиметровке).
-    - Клетки квадратные, масштаб по амплитуде одинаков для всех отведений.
-    """
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
+    import numpy as np
     import math
 
     if signals.ndim != 2:
         raise ValueError("signals должен быть (n_leads, n_samples)")
 
-    # Бумажные параметры
-    paper_speed_mm_s = 25.0   # мм/с
-    gain_mm_per_mV   = 20.0   # мм/мВ
-    mm_per_V = gain_mm_per_mV * 1000.0
+    # Бумага
+    paper_speed_mm_s = 25.0     # мм/с
+    gain_mm_per_mV   = 20.0     # мм/мВ  (как просил)
+    MIN_SPAN_MM      = 40.0     # ⬅️ минимальная высота видимого окна по Y (±20 мм = ±1 мВ)
+    mm_per_V         = gain_mm_per_mV * 1000.0
 
-    # Время и амплитуда -> в миллиметры
+    # Координаты в мм
     n_leads, n_samples = signals.shape
-    t = np.arange(n_samples, dtype=float) / float(fs)       # секунды
-    x_mm = t * paper_speed_mm_s                              # мм по X
+    t = np.arange(n_samples, dtype=float) / float(fs)     # сек
+    x_mm = t * paper_speed_mm_s                            # мм
+    y_mV = _signals_to_mV(signals, units)                  # мВ
+    y_mV = _signals_to_mV(signals, units)  # shape: (n_leads, n_samples)
 
-    y_mV = _signals_to_mV(signals, units)                    # мВ
-    y_mm_all = y_mV * gain_mm_per_mV                         # мм по Y
+    # авто-усиление
+    BASE_GAIN = 20.0  # мм/мВ по умолчанию
+    TARGET_PP_MM = 20.0  # хотим минимум 20 мм пик-ту-пик
+    GAIN_CHOICES = [5, 10, 20, 40, 80, 160]  # стандартные ступени
+    MAX_GAIN = 160.0
 
-    # Общие Y-пределы для всех отведений (одинаковый масштаб)
-    y_min_mm = float(np.min(y_mm_all)) if y_mm_all.size else -10.0
-    y_max_mm = float(np.max(y_mm_all)) if y_mm_all.size else  10.0
-    span = max(1e-6, y_max_mm - y_min_mm)
-    pad = 0.2 * span
-    y_lo = math.floor((y_min_mm - pad) / 1.0) * 1.0          # кратно 1 мм
-    y_hi = math.ceil ((y_max_mm + pad) / 1.0) * 1.0
+    # робастный пик-ту-пик по всем каналам
+    pp_mV = []
+    for i in range(y_mV.shape[0]):
+        if y_mV.shape[1]:
+            p1, p99 = np.percentile(y_mV[i], [1, 99])
+            pp_mV.append(max(0.0, float(p99 - p1)))
+    global_pp_mV = max(pp_mV) if pp_mV else 0.0
 
-    # Точки сетки (1 мм — minor, 5 мм — major)
+    # требуемая чувствительность, чтобы уложиться в TARGET_PP_MM
+    if global_pp_mV > 0:
+        need_gain = TARGET_PP_MM / global_pp_mV
+    else:
+        need_gain = BASE_GAIN
+
+    gain_mm_per_mV = max(BASE_GAIN, min(MAX_GAIN, need_gain))
+
+    # округлим до ближайшей "стандартной" вверх
+    gain_mm_per_mV = next((g for g in GAIN_CHOICES if g >= gain_mm_per_mV), GAIN_CHOICES[-1])
+
+    # далее как было:
+    y_mm_all = y_mV * gain_mm_per_mV
+
+    # Время по X
     x_end = float(x_mm[-1]) if x_mm.size else 0.0
-    xt_minor = np.arange(0, x_end + 1.0, 1.0)
-    xt_major = np.arange(0, x_end + 5.0, 5.0)
-    yt_minor = np.arange(y_lo, y_hi + 1.0, 1.0)
-    yt_major = np.arange(y_lo, y_hi + 5.0, 5.0)
+    xt_minor = np.arange(0, x_end + 1.0, 1.0)              # 1 мм
+    xt_major = np.arange(0, x_end + 5.0, 5.0)              # 5 мм
 
-    # Фигура
-    fig, axes = plt.subplots(nrows=n_leads, figsize=(11, 2.4 * n_leads), sharex=False)
+    # --- КЛЮЧ: единый минимальный диапазон по Y и робастная оценка размаха ---
+    robust_spans = []
+    for i in range(n_leads):
+        y = y_mm_all[i]
+        if y.size:
+            p1, p99 = np.percentile(y, [1, 99])
+            robust_spans.append((p99 - p1) * 1.2)          # небольшой запас
+        else:
+            robust_spans.append(0.0)
+    global_span_mm = max(MIN_SPAN_MM, max(robust_spans) if robust_spans else MIN_SPAN_MM)
+
+    # Подберём высоту фигуры так, чтобы клетки оставались квадратными и дорожки не были плоскими
+    width_in = 11.0
+    # Для equal: высота оси ≈ ширина оси * (global_span_mm / x_end)
+    # Учтём поля: осевая ширина ~ 0.9*width_in
+    h_per_row_in = max(1.2, (0.9 * width_in) * (global_span_mm / max(1e-6, x_end)))
+    fig_height_in = h_per_row_in * n_leads
+
+    fig, axes = plt.subplots(nrows=n_leads, figsize=(width_in, fig_height_in), sharex=False)
     if isinstance(axes, np.ndarray):
         axes = axes.ravel().tolist()
     else:
         axes = [axes]
 
     for i, ax in enumerate(axes):
-        y_mm = y_mm_all[i]
+        y = y_mm_all[i] if i < y_mm_all.shape[0] else np.array([])
+        # Центр по медиане, одинаковый span для всех
+        if y.size:
+            y_center = float(np.median(y))
+        else:
+            y_center = 0.0
+        y_lo = y_center - global_span_mm / 2.0
+        y_hi = y_center + global_span_mm / 2.0
+        # Доцелло до сетки 1 мм
+        y_lo = math.floor(y_lo)
+        y_hi = math.ceil (y_hi)
 
         # Сетка
         ax.set_xticks(xt_major); ax.set_xticks(xt_minor, minor=True)
-        ax.set_yticks(yt_major); ax.set_yticks(yt_minor, minor=True)
+        ax.set_yticks(np.arange(y_lo, y_hi + 5.0, 5.0))
+        ax.set_yticks(np.arange(y_lo, y_hi + 1.0, 1.0), minor=True)
         ax.grid(which='major', color='#ffb3b3', linewidth=0.9, alpha=0.9)
         ax.grid(which='minor', color='#ffe6e6', linewidth=0.6, alpha=0.9)
 
-        # Равный масштаб по X/Y в мм → квадратные клетки
+        # Квадратные клетки
         ax.set_aspect('equal', adjustable='box')
 
-        # Сигнал в мм-координатах
-        ax.plot(x_mm, y_mm, color='black', linewidth=1.1)
-
-        # Пределы
+        # Сигнал
+        ax.plot(x_mm, y, color='black', linewidth=1.1)
         ax.set_xlim(0, x_end)
         ax.set_ylim(y_lo, y_hi)
 
-        # Подпись отведения (без чисел на осях)
+        # Подписи
         label = (lead_labels[i] if lead_labels and i < len(lead_labels) else f"Канал {i+1}")
         ax.set_ylabel(label)
         ax.tick_params(axis='x', which='both', labelbottom=False)
         ax.tick_params(axis='y', which='both', labelleft=False)
 
-    # Подписи с масштабом (без чисел на X)
     if axes:
-        axes[-1].set_xlabel("Скорость 25 мм/с")  # текстовая пометка без числовой шкалы
-    fig.text(0.005, 0.5, f"Усиление {gain_mm_per_mV:g} мм/мВ",
+        axes[-1].set_xlabel("Скорость 25 мм/с")
+    fig.text(0.005, 0.5, f"Чувствительность {gain_mm_per_mV:g} мм/мВ (≈ {mm_per_V:.0f} мм/В)",
              va='center', rotation='vertical')
 
-    # fig.suptitle(title)
     fig.tight_layout(rect=[0.02, 0.02, 1, 0.95])
 
     buf = io.BytesIO()
