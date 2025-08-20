@@ -152,7 +152,7 @@ def render_ecg_png(
 
     if axes:
         axes[-1].set_xlabel("Скорость 25 мм/с")
-    fig.text(0.005, 0.5, f"Чувствительность {gain_mm_per_mV:g} мм/мВ (≈ {mm_per_V:.0f} мм/В)",
+    fig.text(0.005, 0.5, f"Чувствительность {gain_mm_per_mV:g} мм/мВ",
              va='center', rotation='vertical')
 
     fig.tight_layout(rect=[0.02, 0.02, 1, 0.95])
