@@ -20,6 +20,7 @@ import os
 import zipfile
 import tempfile
 from django.contrib import messages
+from .utils import render_ecg_png
 
 
 def register(request):
@@ -126,163 +127,89 @@ def ecg_history(request):
 
 @login_required
 def ecg_plot(request, pk):
-	"""
-	Читает ZIP (.hea/.dat) через Django Storage, извлекает метаданные из .hea,
-	строит превью ЭКГ; при известной скорости бумаги рисует ECG-сетку.
+    """
+    Читает ZIP (.hea/.dat) через Django Storage, извлекает ВСЁ из .hea
+    и строит PNG с бумажной ECG-сеткой (25 мм/с, 10 мм/мВ).
 
-	Параметры GET (опционально):
-	  - records_n: число отображаемых каналов (по умолчанию все из файла)
-	  - sampling_rate: частота дискретизации, Гц (по умолчанию из файла)
-	  - seconds: длительность отображаемого отрезка, с (по умолчанию 10)
-	  - paper_speed: скорость бумаги, мм/с (если не задана и не найдена — сетка не рисуется)
-	"""
-	obj = get_object_or_404(EcgProcess, pk=pk, user=request.user)
+    - НИКАКИХ параметров из GET не используем.
+    - Показываем первые 10 секунд (если запись короче — всю запись).
+    """
+    obj = get_object_or_404(EcgProcess, pk=pk, user=request.user)
 
-	# --- Отладочная инфа о путях и стороже ---
-	try:
-		print("=== ECG DEBUG START ===")
-		print("MEDIA_ROOT:", settings.MEDIA_ROOT)
-		print("MEDIA_URL:", settings.MEDIA_URL)
-		print("ecg_file.name:", obj.ecg_file.name)  # относительный путь от MEDIA_ROOT, например "ecg_files/test001.zip")
+    name_lower = (obj.ecg_file.name or "").lower()
+    if not name_lower.endswith(".zip"):
+        raise Http404("Ожидается ZIP-файл (WFDB .hea/.dat внутри).")
 
-		storage_path = None
-		try:
-			storage_path = default_storage.path(obj.ecg_file.name)
-			print("default_storage.path(...):", storage_path)
-			print("os.path.exists(storage_path):", os.path.exists(storage_path))
-		except Exception as e:
-			print("default_storage.path ERROR:", repr(e))
+    # --- читаем zip из storage ---
+    try:
+        with obj.ecg_file.open('rb') as fobj:
+            zip_bytes = io.BytesIO(fobj.read())
+    except Exception as e:
+        raise Http404(f"Не удалось открыть файл из storage: {e}")
 
-		# Не используем абсолютный путь — читаем через storage/open
-		print("Will open via obj.ecg_file.open('rb') and stream bytes.")
-		print("=== ECG DEBUG END ===")
-	except Exception:
-		# на случай, если print где-то упадёт — не ломаем вью
-		pass
+    import wfdb
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
 
-	name_lower = (obj.ecg_file.name or "").lower()
-	if not name_lower.endswith(".zip"):
-		raise Http404("Ожидается ZIP-файл (WFDB .hea/.dat внутри).")
+    with tempfile.TemporaryDirectory() as tmpdir:
+        try:
+            with zipfile.ZipFile(zip_bytes, 'r') as zf:
+                zf.extractall(tmpdir)
+        except Exception as e:
+            raise Http404(f"Некорректный ZIP: {e}")
 
-	# Опциональные оверрайды из запроса
-	q_records_n = request.GET.get('records_n')
-	q_fs = request.GET.get('sampling_rate')
-	q_seconds = request.GET.get('seconds')
-	q_paper_speed = request.GET.get('paper_speed')
-	try:
-		q_records_n = int(q_records_n) if q_records_n is not None else None
-	except Exception:
-		q_records_n = None
-	try:
-		q_fs = float(q_fs) if q_fs is not None else None
-	except Exception:
-		q_fs = None
-	try:
-		q_seconds = float(q_seconds) if q_seconds is not None else None
-	except Exception:
-		q_seconds = None
-	try:
-		q_paper_speed = float(q_paper_speed) if q_paper_speed is not None else None
-	except Exception:
-		q_paper_speed = None
+        # ищем базовое имя с .hea
+        bases = {}
+        for fname in os.listdir(tmpdir):
+            base, ext = os.path.splitext(fname)
+            if ext.lower() in ('.hea', '.dat'):
+                bases.setdefault(base, set()).add(ext.lower())
 
-	# Импорт WFDB внутри функции
-	import wfdb
-	import re
+        selected_base = next((b for b, exts in bases.items() if '.hea' in exts), None)
+        if not selected_base:
+            raise Http404("В ZIP не найдены файлы WFDB (.hea/.dat).")
 
-	# Читаем файл ЧЕРЕЗ storage, без абсолютных путей
-	try:
-		with obj.ecg_file.open('rb') as fobj:
-			zip_bytes = io.BytesIO(fobj.read())
-	except Exception as e:
-		raise Http404(f"Не удалось открыть файл из storage: {e}")
+        fpath = os.path.join(tmpdir, selected_base)
 
-	# Распаковываем во временную директорию и ищем пару hea/dat
-	with tempfile.TemporaryDirectory() as tmpdir:
-		try:
-			with zipfile.ZipFile(zip_bytes, 'r') as zf:
-				zf.extractall(tmpdir)
-		except Exception as e:
-			raise Http404(f"Некорректный ZIP: {e}")
+        # читаем WFDB
+        try:
+            record = wfdb.rdrecord(fpath)
+        except Exception as e:
+            raise Http404(f"Не удалось прочитать WFDB запись: {e}")
 
-		bases = {}
-		for fname in os.listdir(tmpdir):
-			base, ext = os.path.splitext(fname)
-			ext = ext.lower()
-			if ext in ('.hea', '.dat'):
-				bases.setdefault(base, set()).add(ext)
+        fs = getattr(record, 'fs', None)
+        if not fs or fs <= 0:
+            raise Http404("В заголовке .hea не указана валидная частота дискретизации (fs).")
 
-		selected_base = None
-		for base, exts in bases.items():
-			if '.hea' in exts:  # требуем наличие заголовка
-				selected_base = base
-				break
-		if not selected_base:
-			raise Http404("В ZIP не найдены файлы WFDB (.hea/.dat).")
+        # берём физические единицы если есть, иначе цифровые
+        if getattr(record, 'p_signal', None) is not None:
+            sig = record.p_signal.T  # (leads, samples)
+            sig_units = list(getattr(record, 'sig_units', []) or getattr(record, 'units', []) or [])
+        elif getattr(record, 'd_signal', None) is not None:
+            # физкалибровки может не быть — тогда сетка всё равно будет 10 мм/мВ,
+            # но значения будут в "кодах". Стараемся привести к мВ при наличии units/gain.
+            sig = record.d_signal.T.astype(float)
+            sig_units = []
+        else:
+            raise Http404("WFDB запись не содержит p_signal/d_signal.")
 
-		fpath = os.path.join(tmpdir, selected_base)  # базовое имя без расширения
-		try:
-			record = wfdb.rdrecord(fpath)
-		except Exception as e:
-			raise Http404(f"Не удалось прочитать WFDB запись: {e}")
+        lead_labels = list(getattr(record, 'sig_name', []) or [])
+        n_leads, total_samples = sig.shape
 
-		# Сигналы: предпочитаем p_signal (в физических единицах), иначе d_signal
-		if getattr(record, 'p_signal', None) is not None:
-			signals = record.p_signal.T
-		elif getattr(record, 'd_signal', None) is not None:
-			signals = record.d_signal.T.astype(float)
-		else:
-			raise Http404("WFDB запись не содержит p_signal/d_signal.")
+        # показываем первые 10 секунд
+        seconds_to_show = 10.0
+        n_samples = int(min(total_samples, max(1, fs * seconds_to_show)))
+        sig = sig[:, :n_samples]
 
-		# Параметры из заголовка
-		fs = getattr(record, 'fs', None)
-		lead_labels = list(getattr(record, 'sig_name', []) or [])
-		units = None
-		if hasattr(record, 'units') and record.units:
-			units = list(record.units)
-		elif hasattr(record, 'sig_units') and record.sig_units:
-			units = list(record.sig_units)
+        # отрисовка
+        buf = render_ecg_png(
+            signals=sig,
+            fs=fs,
+            lead_labels=lead_labels,
+            units=sig_units,
+            title="ЭКГ"
+        )
+        return HttpResponse(buf.read(), content_type='image/png')
 
-		# Попытка извлечь скорость из комментариев заголовка (форматы вида "25 mm/s")
-		paper_speed = q_paper_speed
-		if paper_speed is None and hasattr(record, 'comments') and record.comments:
-			for comment in record.comments:
-				m = re.search(r'(\d+(?:[\.,]\d+)?)\s*mm\s*/?\s*s', comment, flags=re.IGNORECASE)
-				if not m:
-					m = re.search(r'(\d+(?:[\.,]\d+)?)\s*мм\s*/?\s*с', comment, flags=re.IGNORECASE)
-				if m:
-					try:
-						paper_speed = float(m.group(1).replace(',', '.'))
-					except Exception:
-						paper_speed = None
-					break
 
-		n_leads, total_samples = signals.shape
-
-		# Значения по умолчанию на основе файла + возможные оверрайды из запроса
-		records_n = q_records_n if q_records_n is not None else n_leads
-		if q_fs is not None:
-			fs = q_fs
-
-		seconds = q_seconds if q_seconds is not None else 10.0
-		if fs and fs > 0:
-			n_samples = int(min(total_samples, max(1, fs * seconds)))
-		else:
-			# если fs неизвестна, ограничим разумным числом точек
-			n_samples = min(total_samples, 5000)
-
-		records_n = max(1, min(records_n, n_leads))
-		signals = signals[:records_n, :n_samples]
-
-		from .utils import render_ecg_png
-		buf = render_ecg_png(
-			signals,
-			records_n=records_n,
-			title="ЭКГ",
-			lead_labels=lead_labels,
-			fs=fs,
-			units=units,
-			paper_speed=paper_speed,
-		)
-
-		return HttpResponse(buf.read(), content_type='image/png')

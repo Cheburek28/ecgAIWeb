@@ -4,110 +4,118 @@ from typing import Optional, Sequence
 import numpy as np
 
 
+def _signals_to_mV(signals: np.ndarray, units: Optional[Sequence[str]]) -> np.ndarray:
+    """Приводим все каналы к мВ (если units = V/µV). Если units неизвестны — считаем мВ."""
+    out = np.array(signals, dtype=float, copy=True)
+    if not units:
+        return out
+    scales = []
+    for i in range(out.shape[0]):
+        u = (units[i] if i < len(units) and units[i] else '').lower()
+        if u in ('mv',):
+            s = 1.0
+        elif u in ('v',):
+            s = 1000.0
+        elif u in ('uv', 'µv'):
+            s = 1.0 / 1000.0
+        else:
+            s = 1.0  # неизвестно — считаем мВ
+        scales.append(s)
+    return out * np.array(scales)[:, None]
+
+
 def render_ecg_png(
-	signals: np.ndarray,
-	records_n: int = 3,
-	title: str = "ЭКГ",
-	lead_labels: Optional[Sequence[str]] = None,
-	fs: Optional[float] = None,
-	units: Optional[Sequence[str]] = None,
-	paper_speed: Optional[float] = None,
+    signals: np.ndarray,
+    fs: float,
+    title: str = "ЭКГ",
+    lead_labels: Optional[Sequence[str]] = None,
+    units: Optional[Sequence[str]] = None,
 ) -> io.BytesIO:
-	"""
-	Рисует превью ЭКГ; при известной скорости бумаги рисует ECG-сетку.
-	signals: np.ndarray формы (n_leads, n_samples) (в физ. единицах)
-	records_n: сколько каналов показывать (1..n_leads)
-	lead_labels: подписи для каналов (длина >= records_n), опционально
-	fs: частота дискретизации (Гц) для оси X
-	units: единицы измерения каналов (для подписи), опционально
-	paper_speed: скорость бумаги (мм/с). Если None — сетка не рисуется.
-	"""
-	import matplotlib
-	matplotlib.use('Agg')  # без GUI
-	import matplotlib.pyplot as plt
-	from matplotlib.ticker import MaxNLocator, MultipleLocator
+    """
+    Рисует ECG с бумажной сеткой: 25 мм/с по X и 10 мм/мВ по Y.
+    - По оси X цифр нет (время читается по миллиметровке).
+    - Клетки квадратные, масштаб по амплитуде одинаков для всех отведений.
+    """
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    import math
 
-	if signals.ndim != 2:
-		raise ValueError("signals должен быть (n_leads, n_samples)")
+    if signals.ndim != 2:
+        raise ValueError("signals должен быть (n_leads, n_samples)")
 
-	n_leads, _ = signals.shape
-	records_n = max(1, min(records_n, n_leads))
-	show = signals[:records_n]
+    # Бумажные параметры
+    paper_speed_mm_s = 25.0   # мм/с
+    gain_mm_per_mV   = 20.0   # мм/мВ
+    mm_per_V = gain_mm_per_mV * 1000.0
 
-	# X: время в секундах, если известен fs
-	n_samples = show.shape[1]
-	if fs and fs > 0:
-		x = np.arange(n_samples) / float(fs)
-		x_label = "s"
-	else:
-		x = np.arange(n_samples)
-		x_label = "samples"
+    # Время и амплитуда -> в миллиметры
+    n_leads, n_samples = signals.shape
+    t = np.arange(n_samples, dtype=float) / float(fs)       # секунды
+    x_mm = t * paper_speed_mm_s                              # мм по X
 
-	fig, axes = plt.subplots(
-		nrows=records_n, figsize=(11, 2.4 * records_n), sharex=True
-	)
-	if records_n == 1:
-		axes = [axes]
+    y_mV = _signals_to_mV(signals, units)                    # мВ
+    y_mm_all = y_mV * gain_mm_per_mV                         # мм по Y
 
-	grid_enabled = (paper_speed is not None) and (fs is not None and fs > 0)
+    # Общие Y-пределы для всех отведений (одинаковый масштаб)
+    y_min_mm = float(np.min(y_mm_all)) if y_mm_all.size else -10.0
+    y_max_mm = float(np.max(y_mm_all)) if y_mm_all.size else  10.0
+    span = max(1e-6, y_max_mm - y_min_mm)
+    pad = 0.2 * span
+    y_lo = math.floor((y_min_mm - pad) / 1.0) * 1.0          # кратно 1 мм
+    y_hi = math.ceil ((y_max_mm + pad) / 1.0) * 1.0
 
-	# Сетка по времени: при известной бумажной скорости — крупная 5 мм и малая 1 мм
-	for idx in range(records_n):
-		ax = axes[idx]
+    # Точки сетки (1 мм — minor, 5 мм — major)
+    x_end = float(x_mm[-1]) if x_mm.size else 0.0
+    xt_minor = np.arange(0, x_end + 1.0, 1.0)
+    xt_major = np.arange(0, x_end + 5.0, 5.0)
+    yt_minor = np.arange(y_lo, y_hi + 1.0, 1.0)
+    yt_major = np.arange(y_lo, y_hi + 5.0, 5.0)
 
-		if grid_enabled and x.size > 0:
-			major_xtick = 5.0 / float(paper_speed)
-			minor_xtick = 1.0 / float(paper_speed)
-			ax.set_xticks(np.arange(0, x[-1] + major_xtick, major_xtick))
-			ax.set_xticks(np.arange(0, x[-1] + minor_xtick, minor_xtick), minor=True)
+    # Фигура
+    fig, axes = plt.subplots(nrows=n_leads, figsize=(11, 2.4 * n_leads), sharex=False)
+    if isinstance(axes, np.ndarray):
+        axes = axes.ravel().tolist()
+    else:
+        axes = [axes]
 
-			# Y: подберём шаг 0.5 mV (major) и 0.1 mV (minor), если единицы mV
-			label_units = None
-			if units and idx < len(units):
-				label_units = units[idx]
+    for i, ax in enumerate(axes):
+        y_mm = y_mm_all[i]
 
-			if label_units and label_units.lower() == 'mv':
-				data_min, data_max = np.min(show[idx]), np.max(show[idx])
-				span = max(1e-6, data_max - data_min)
-				pad = 0.2 * span
-				y_low = data_min - pad
-				y_high = data_max + pad
-				major_ytick = 0.5
-				minor_ytick = 0.1
-				start_major = np.floor(y_low / major_ytick) * major_ytick
-				start_minor = np.floor(y_low / minor_ytick) * minor_ytick
-				ax.set_yticks(np.arange(start_major, y_high + major_ytick, major_ytick))
-				ax.set_yticks(np.arange(start_minor, y_high + minor_ytick, minor_ytick), minor=True)
-			else:
-				ax.yaxis.set_major_locator(MaxNLocator(6))
-				ax.yaxis.set_minor_locator(MultipleLocator(1))
+        # Сетка
+        ax.set_xticks(xt_major); ax.set_xticks(xt_minor, minor=True)
+        ax.set_yticks(yt_major); ax.set_yticks(yt_minor, minor=True)
+        ax.grid(which='major', color='#ffb3b3', linewidth=0.9, alpha=0.9)
+        ax.grid(which='minor', color='#ffe6e6', linewidth=0.6, alpha=0.9)
 
-			# styling grid
-			ax.grid(which='major', color='#ffb3b3', linestyle='-', linewidth=0.8, alpha=0.7)
-			ax.grid(which='minor', color='#ffe6e6', linestyle='-', linewidth=0.6, alpha=0.8)
+        # Равный масштаб по X/Y в мм → квадратные клетки
+        ax.set_aspect('equal', adjustable='box')
 
-		ax.plot(x, show[idx], color='black', linewidth=1.1)
-		label = (
-			lead_labels[idx] if lead_labels and idx < len(lead_labels)
-			else f"Канал {idx+1}"
-		)
-		ax.set_ylabel(label)
-		if fs and fs > 0 and x.size > 0:
-			ax.set_xlim(0, x[-1])
+        # Сигнал в мм-координатах
+        ax.plot(x_mm, y_mm, color='black', linewidth=1.1)
 
-		# скрыть числовые подписи на осях, оставить только сетку
-		ax.tick_params(axis='x', which='both', labelbottom=False)
-		ax.tick_params(axis='y', which='both', labelleft=False)
+        # Пределы
+        ax.set_xlim(0, x_end)
+        ax.set_ylim(y_lo, y_hi)
 
-	# убрать подпись оси X
-	axes[-1].set_xlabel("")
-	# заголовок: добавим скорость, если она известна
-	final_title = f"{title} • {paper_speed:g} мм/с" if paper_speed is not None else title
-	fig.suptitle(final_title)
-	fig.tight_layout(rect=[0, 0, 1, 0.95])
+        # Подпись отведения (без чисел на осях)
+        label = (lead_labels[i] if lead_labels and i < len(lead_labels) else f"Канал {i+1}")
+        ax.set_ylabel(label)
+        ax.tick_params(axis='x', which='both', labelbottom=False)
+        ax.tick_params(axis='y', which='both', labelleft=False)
 
-	buf = io.BytesIO()
-	fig.savefig(buf, format='png')
-	plt.close(fig)
-	buf.seek(0)
-	return buf
+    # Подписи с масштабом (без чисел на X)
+    if axes:
+        axes[-1].set_xlabel("Скорость 25 мм/с")  # текстовая пометка без числовой шкалы
+    fig.text(0.005, 0.5, f"Усиление {gain_mm_per_mV:g} мм/мВ",
+             va='center', rotation='vertical')
+
+    # fig.suptitle(title)
+    fig.tight_layout(rect=[0.02, 0.02, 1, 0.95])
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format='png', dpi=200)
+    plt.close(fig)
+    buf.seek(0)
+    return buf
+
