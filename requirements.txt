@@ -4,3 +4,6 @@ markdown
 matplotlib
 pandas
 wfdb
+pyEDFlib
+scipy
+numpy

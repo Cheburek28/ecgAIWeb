@@ -20,95 +20,99 @@ import os
 import zipfile
 import tempfile
 from django.contrib import messages
-from .utils import render_ecg_png
+from .utils import render_ecg_png, convert_uploaded_edf_to_wfdb_zip
 
 
 def register(request):
-	if request.method == 'POST':
-		form = UserCreationForm(request.POST)
-		if form.is_valid():
-			user = form.save()
-			# Автоматически логиним сразу после регистрации (по желанию)
-			login(request, user)
-			return redirect('home')
-	else:
-		form = UserCreationForm()
-	return render(request, 'analysis/register.html', {'form': form})
+    if request.method == 'POST':
+        form = UserCreationForm(request.POST)
+        if form.is_valid():
+            user = form.save()
+            # Автоматически логиним сразу после регистрации (по желанию)
+            login(request, user)
+            return redirect('home')
+    else:
+        form = UserCreationForm()
+    return render(request, 'analysis/register.html', {'form': form})
 
 
 def user_login(request):
-	if request.method == 'POST':
-		form = AuthenticationForm(data=request.POST)
-		if form.is_valid():
-			user = form.get_user()
-			if user is not None:
-				login(request, user)
-				return redirect('home')
-	else:
-		form = AuthenticationForm()
-	return render(request, 'analysis/login.html', {'form': form})
+    if request.method == 'POST':
+        form = AuthenticationForm(data=request.POST)
+        if form.is_valid():
+            user = form.get_user()
+            if user is not None:
+                login(request, user)
+                return redirect('home')
+    else:
+        form = AuthenticationForm()
+    return render(request, 'analysis/login.html', {'form': form})
 
 
 def user_logout(request):
-	logout(request)
-	return redirect('home')
+    logout(request)
+    return redirect('home')
 
 
 def home(request):
-	return render(request, 'analysis/home.html')
+    return render(request, 'analysis/home.html')
 
 
 @login_required
 def ecg_upload(request):
-	if request.method == 'POST':
-		comment = request.POST.get('comment', '')
-		if 'ecg_file' in request.FILES:
-			ecg_file = request.FILES['ecg_file']
+    if request.method == 'POST':
+        comment = request.POST.get('comment', '')
+        if 'ecg_file' not in request.FILES:
+            messages.error(request, "Файл не прикреплён")
+            return redirect('ecg_upload')
 
-			# Проверяем что файл это zip
-			if not ecg_file.name.endswith('.zip'):
-				messages.error(request, "Можно загрузить только файлы в формате .zip")
-				return redirect('ecg_upload')  # или можно перерендерить ту же страницу
+        ecg_file = request.FILES['ecg_file']
+        ext = os.path.splitext(ecg_file.name)[1].lower()
 
-			# Сохраняем модель
-			ecg_process = EcgProcess.objects.create(
-				user=request.user,
-				ecg_file=ecg_file,
-				comment=comment
-			)
+        # Разрешаем .zip ИЛИ .edf
+        if ext == '.edf':
+            try:
+                ecg_file = convert_uploaded_edf_to_wfdb_zip(ecg_file)  # ← получаем ZIP
+            except Exception as e:
+                messages.error(request, f"Не удалось конвертировать EDF: {e}")
+                return redirect('ecg_upload')
+        elif ext != '.zip':
+            messages.error(request, "Можно загрузить только .zip или .edf")
+            return redirect('ecg_upload')
 
-			# Делаем запрос к ecg_service
-			try:
-				ecg_service_url = getattr(settings, 'ECG_SERVICE_URL', 'http://localhost:8000')
-				ecg_file.seek(0)
-				response = requests.post(
-					f"{ecg_service_url}/ecg",
-					files={'file': (ecg_file.name, ecg_file.file, 'application/zip')}
-				)
-				response.raise_for_status()
-				data = response.json()
+        # Сохраняем модель уже с ZIP-файлом
+        ecg_process = EcgProcess.objects.create(
+            user=request.user,
+            ecg_file=ecg_file,
+            comment=comment
+        )
 
-				ecg_process.result = data
-				# допустим, результат — это текст в ответе
-				if "error" in data and data["error"]:
-					ecg_process.result = "Ошибка работы модели: " + data["error"]
-				else:
-					ecg_process.result = data
+        # Дальше — как у тебя было
+        try:
+            ecg_service_url = getattr(settings, 'ECG_SERVICE_URL', 'http://localhost:8000')
+            ecg_process.ecg_file.open('rb')  # на всякий
+            ecg_file.seek(0)
+            response = requests.post(
+                f"{ecg_service_url}/ecg",
+                files={'file': (ecg_file.name, ecg_file.file, 'application/zip')}
+            )
+            response.raise_for_status()
+            data = response.json()
+            if isinstance(data, dict) and data.get("error"):
+                ecg_process.result = "Ошибка работы модели: " + data["error"]
+            else:
+                ecg_process.result = data
+        except requests.RequestException as e:
+            try:
+                error_detail = e.response.json()
+            except Exception:
+                error_detail = str(e)
+            ecg_process.result = f"Ошибка обращения к ECG сервису: {error_detail}"
 
-			except requests.RequestException as e:
-				try:
-					error_detail = e.response.json()
-				except Exception:
-					error_detail = str(e)
-				ecg_process.result = f"Ошибка обращения к ECG сервису: {error_detail}"
+        ecg_process.save()
+        return redirect('ecg_history')
 
-			ecg_process.save()
-
-			return redirect('ecg_history')
-		else:
-			# Обработка случая, если файл не прикрепили
-			pass
-	return render(request, 'analysis/ecg_upload.html')
+    return render(request, 'analysis/ecg_upload.html')
 
 
 import markdown
@@ -116,13 +120,13 @@ import markdown
 
 @login_required
 def ecg_history(request):
-	# Получим все записи пользователя, отсортируем по дате
-	ecg_records = EcgProcess.objects.filter(user=request.user).order_by('-created_at')
+    # Получим все записи пользователя, отсортируем по дате
+    ecg_records = EcgProcess.objects.filter(user=request.user).order_by('-created_at')
 
-	for record in ecg_records:
-		record.result_html = markdown.markdown(record.result, extensions=['extra'], output_format='html5')
+    for record in ecg_records:
+        record.result_html = markdown.markdown(record.result, extensions=['extra'], output_format='html5')
 
-	return render(request, 'analysis/ecg_history.html', {'ecg_records': ecg_records})
+    return render(request, 'analysis/ecg_history.html', {'ecg_records': ecg_records})
 
 
 @login_required
@@ -211,5 +215,3 @@ def ecg_plot(request, pk):
             title="ЭКГ"
         )
         return HttpResponse(buf.read(), content_type='image/png')
-
-

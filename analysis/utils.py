@@ -2,6 +2,12 @@
 import io
 from typing import Optional, Sequence
 import numpy as np
+import re
+from math import gcd
+from fractions import Fraction
+from scipy.signal import resample_poly
+import io, os, zipfile, tempfile
+from django.core.files.uploadedfile import SimpleUploadedFile
 
 
 def _signals_to_mV(signals: np.ndarray, units: Optional[Sequence[str]]) -> np.ndarray:
@@ -119,3 +125,105 @@ def render_ecg_png(
     buf.seek(0)
     return buf
 
+
+def _sanitize_record_name(name: str) -> str:
+    base = os.path.splitext(os.path.basename(name))[0]
+    base = re.sub(r'[^A-Za-z0-9_\-]+', '_', base)
+    return (base or "record")[:64]
+
+
+def _lcm(a, b): return a * b // gcd(a, b)
+
+
+def _choose_target_fs(fs_list, mode="max", set_fs=None):
+    fs_list = [int(round(f)) for f in fs_list]
+    if mode == "set":
+        if not set_fs:
+            raise ValueError("--fs must be set when mode='set'")
+        return int(round(set_fs))
+    if len(set(fs_list)) == 1:
+        return fs_list[0]
+    if mode == "lcm":
+        t = fs_list[0]
+        for f in fs_list[1:]:
+            t = _lcm(t, f)
+            if t > 5000:  # ограничим безумные LCM
+                return max(fs_list)
+        return t
+    return max(fs_list)  # default
+
+
+def convert_uploaded_edf_to_wfdb_zip(uploaded_edf_file, fs_mode="max", set_fs=None, seconds=None) -> SimpleUploadedFile:
+    """
+    Принимает загруженный EDF-файл (UploadedFile), возвращает SimpleUploadedFile (ZIP с .hea/.dat).
+    """
+    # Локальные импорты, чтобы зависимости тянулись только при EDF
+    import pyedflib, wfdb
+
+    recname = _sanitize_record_name(uploaded_edf_file.name)
+
+    # Пишем EDF во временный файл (pyEDFlib требует путь)
+    edf_bytes = uploaded_edf_file.read()
+    with tempfile.TemporaryDirectory() as tmp:
+        edf_path = os.path.join(tmp, "in.edf")
+        with open(edf_path, "wb") as f:
+            f.write(edf_bytes)
+
+        # Чтение EDF (физические значения)
+        r = pyedflib.EdfReader(edf_path)
+        try:
+            n = r.signals_in_file
+            labels = r.getSignalLabels()
+            fs_list = [int(r.getSampleFrequency(i)) for i in range(n)]
+            units = [r.getPhysicalDimension(i) or "" for i in range(n)]
+            sigs = [r.readSignal(i).astype(np.float64) for i in range(n)]
+            sigs = [np.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0) for x in sigs]
+        finally:
+            r.close()
+
+        # Выбираем общий fs и ресемплим при необходимости
+        fs_target = _choose_target_fs(fs_list, mode=fs_mode, set_fs=set_fs)
+        resampled = []
+        for x, fs_src in zip(sigs, fs_list):
+            if fs_src == fs_target:
+                y = x
+            else:
+                frac = Fraction(fs_target, fs_src).limit_denominator()
+                y = resample_poly(x, frac.numerator, frac.denominator)
+            resampled.append(y)
+        min_len = min(len(y) for y in resampled)
+        data = np.vstack([y[:min_len] for y in resampled])  # (n_signals, n_samples)
+
+        if seconds and seconds > 0:
+            n_samples = int(round(seconds * fs_target))
+            n_samples = max(1, min(n_samples, data.shape[1]))
+            data = data[:, :n_samples]
+
+        # Пишем WFDB во временную папку с помощью wfdb.wrsamp
+        outdir = tmp
+        p_sig = data.T  # (n_samples, n_signals)
+        fmt = ['16'] * p_sig.shape[1]
+        if not labels or len(labels) != p_sig.shape[1]:
+            labels = [f"ch{i+1}" for i in range(p_sig.shape[1])]
+        if not units or len(units) != p_sig.shape[1]:
+            units = [''] * p_sig.shape[1]
+
+        wfdb.wrsamp(record_name=recname,
+                    fs=fs_target,
+                    units=units,
+                    sig_name=labels,
+                    p_signal=p_sig,
+                    fmt=fmt,
+                    comments=[f"Converted from EDF; original fs={fs_list}; target fs={fs_target}"],
+                    write_dir=outdir)
+
+        # Упаковываем .hea и .dat в ZIP (в память)
+        zip_buf = io.BytesIO()
+        with zipfile.ZipFile(zip_buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+            for ext in ('.hea', '.dat'):
+                path = os.path.join(outdir, recname + ext)
+                zf.write(path, arcname=recname + ext)
+        zip_buf.seek(0)
+
+    # Возвращаем как загруженный ZIP для дальнейшей логики
+    return SimpleUploadedFile(f"{recname}.zip", zip_buf.getvalue(), content_type='application/zip')
