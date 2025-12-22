@@ -265,3 +265,89 @@ def convert_uploaded_edf_to_wfdb_zip(uploaded_edf_file, fs_mode="max", set_fs=No
 
     # Возвращаем как загруженный ZIP для дальнейшей логики
     return SimpleUploadedFile(f"{recname}.zip", zip_buf.getvalue(), content_type='application/zip')
+
+
+def convert_uploaded_json_to_wfdb_zip(uploaded_json_file, fs=500) -> SimpleUploadedFile:
+    """
+    Конвертация JSON с signal_segments/dots → WFDB ZIP (.hea/.dat)
+    """
+    import json
+    import numpy as np
+    import wfdb
+    import tempfile
+    import os
+    import io
+    import zipfile
+
+    recname = _sanitize_record_name(uploaded_json_file.name)
+
+    payload = json.loads(uploaded_json_file.read().decode("utf-8"))
+
+    signals = []
+    labels = []
+
+    for ch in payload:
+        label = ch.get("label", "ch")
+        scale = ch.get("scale", 1.0)
+
+        segments = ch.get("signal_segments", [])
+        dots = next((s for s in segments if s.get("type") == "dots"), None)
+        if dots is None:
+            continue
+
+        data = dots.get("data", [])
+        if not data:
+            continue
+
+        # data = [[index, value], ...]
+        data = sorted(data, key=lambda x: x[0])
+
+        values = np.array([v for _, v in data], dtype=np.float64)
+
+        # применяем scale (если нужно — легко убрать)
+        values = values / scale
+
+        values = np.nan_to_num(values, nan=0.0, posinf=0.0, neginf=0.0)
+
+        signals.append(values)
+        labels.append(label)
+
+    if not signals:
+        raise ValueError("JSON does not contain valid ECG signals")
+
+    # приводим к одинаковой длине
+    min_len = min(len(s) for s in signals)
+    signals = [s[:min_len] for s in signals]
+
+    data = np.vstack(signals)  # (n_channels, n_samples)
+
+    # --- пишем WFDB ---
+    with tempfile.TemporaryDirectory() as tmp:
+        p_signal = data.T  # (n_samples, n_channels)
+
+        wfdb.wrsamp(
+            record_name=recname,
+            fs=fs,
+            units=["mV"] * p_signal.shape[1],
+            sig_name=labels,
+            p_signal=p_signal,
+            fmt=["16"] * p_signal.shape[1],
+            comments=["Converted from JSON (dots format)"],
+            write_dir=tmp
+        )
+
+        zip_buf = io.BytesIO()
+        with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
+            for ext in (".hea", ".dat"):
+                zf.write(
+                    os.path.join(tmp, recname + ext),
+                    arcname=recname + ext
+                )
+
+        zip_buf.seek(0)
+
+    return SimpleUploadedFile(
+        f"{recname}.zip",
+        zip_buf.getvalue(),
+        content_type="application/zip"
+    )

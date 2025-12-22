@@ -20,7 +20,7 @@ import os
 import zipfile
 import tempfile
 from django.contrib import messages
-from .utils import render_ecg_png, convert_uploaded_edf_to_wfdb_zip
+from .utils import render_ecg_png, convert_uploaded_edf_to_wfdb_zip, convert_uploaded_json_to_wfdb_zip
 
 
 def register(request):
@@ -69,6 +69,7 @@ def ecg_upload(request):
         ecg_file = request.FILES['ecg_file']
         ext = os.path.splitext(ecg_file.name)[1].lower()
 
+        print(f"ECG file name {ecg_file.name}, ext {ext}")
         # Разрешаем .zip ИЛИ .edf
         if ext == '.edf':
             try:
@@ -76,9 +77,13 @@ def ecg_upload(request):
             except Exception as e:
                 messages.error(request, f"Не удалось конвертировать EDF: {e}")
                 return redirect('ecg_upload')
+        elif ext == '.json':
+            ecg_file = convert_uploaded_json_to_wfdb_zip(ecg_file, fs=200)
         elif ext != '.zip':
             messages.error(request, "Можно загрузить только .zip или .edf")
             return redirect('ecg_upload')
+
+        print(f"Saved ecg file {ecg_file.name}")
 
         # Сохраняем модель уже с ZIP-файлом
         ecg_process = EcgProcess.objects.create(
